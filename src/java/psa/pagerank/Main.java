@@ -3,12 +3,37 @@ package psa.pagerank;
 import java.util.Random;
 import java.util.Scanner;
 
+import mpi.MPI;
+
 public class Main {
+    enum Mode {
+        SEQUENTIAL, PARALLEL, DISTRIBUTED
+    }
 
     public static void main(String[] args) {
+        Mode mode = Mode.SEQUENTIAL;
         int nV, nE, seed;
         double d;
         Scanner sc = new Scanner(System.in);
+
+        System.out.println("Enter mode (0: SEQUENTIAL, 1: PARALLEL, 2: DISTRIBUTED): ");
+        int modeInput = sc.nextInt();
+        switch (modeInput) {
+            case 0:
+                mode = Mode.SEQUENTIAL;
+                break;
+            case 1:
+                mode = Mode.PARALLEL;
+                break;
+            case 2:
+                mode = Mode.DISTRIBUTED;
+                break;
+            default:
+                System.out.println("Invalid mode, defaulting to SEQUENTIAL");
+                sc.close();
+                return;
+        }
+
         System.out.print("Enter the number of vertices and edges: ");
         nV = sc.nextInt();
         nE = sc.nextInt();
@@ -26,21 +51,61 @@ public class Main {
         }
         System.out.print("Enter the random seed: ");
         seed = sc.nextInt();
-        Random rand = new Random(seed);
 
-        boolean[][] adj = new boolean[nV][nV];
-        for (int i = 0; i < nE;) {
-            int u = rand.nextInt(nV);
-            int v = rand.nextInt(nV);
-            if (u == v || adj[u][v]) {
-                continue;
+        if (mode == Mode.DISTRIBUTED) {
+            String[] cmd = {
+                "java",
+                "-Djava.library.path=C:\\mpj\\lib",
+                "-DMPJ_HOME=C:\\mpj",
+                "-jar", "C:\\mpj\\lib\\starter.jar",
+                "-np", "12",
+                "-cp", "C:\\Users\\svens\\Downloads\\89231433_pagerank\\pagerank\\out\\production\\pagerank;C:\\mpj\\lib\\mpj.jar",
+                "psa.pagerank.Distributed",
+                String.valueOf(nV),
+                String.valueOf(nE),
+                String.valueOf(d),
+                String.valueOf(seed)
+            };
+
+            try {
+                ProcessBuilder pb = new ProcessBuilder(cmd);
+                pb.inheritIO();
+                pb.start();
+            } catch (Exception e) {
+                e.printStackTrace();
+                System.out.println("Error launching distributed process");
             }
-            adj[u][v] = true;
-            i++;
+            sc.close();
+            return;
         }
+
+        // we don't parallelize the graph generation to only measure the PageRank algorithm performance
+        boolean[][] adj = generateGraph(nV, nE, seed);
+
         PageRank pr = new PageRank(adj, d);
         int iter = 0;
-        while (pr.iter() > 1e-5) {
+        
+        while (true) {
+            double convergence;
+            switch (mode) {
+                case SEQUENTIAL:
+                    convergence = pr.sequentialIter();
+                    break;
+                case PARALLEL:
+                    convergence = pr.parallelIter();
+                    break;
+                case DISTRIBUTED:
+                    convergence = pr.distributedIter();
+                    break;
+                default:
+                    throw new IllegalStateException("Unexpected mode: " + mode);
+            }
+            
+            if (convergence <= 1e-5) {
+                break;
+            }
+            
+            // Print current ranks
             for (int j = 0; j < pr.rank.length; j++) {
                 System.out.print(pr.rank[j] + " ");
             }
@@ -48,6 +113,7 @@ public class Main {
             iter++;
         }
         System.out.println("Converged in " + iter + " iterations");
+
         System.out.print("Enter filename to save the graph as csv (empty for no save): ");
         String filename = sc.next();
         if (!filename.isEmpty()) {
@@ -60,6 +126,23 @@ public class Main {
             saveRanks(pr.rank, filename);
         }
         sc.close();
+    }
+
+    public static boolean[][] generateGraph(int nV, int nE, int seed) {
+        Random rand = new Random(seed);
+        boolean[][] adj = new boolean[nV][nV];
+        
+        for (int i = 0; i < nE;) {
+            int u = rand.nextInt(nV);
+            int v = rand.nextInt(nV);
+            if (u == v || adj[u][v]) {
+                continue;
+            }
+            adj[u][v] = true;
+            i++;
+        }
+        
+        return adj;
     }
 
     public static void saveGraph(boolean[][] adj, String filename) {
